@@ -83,6 +83,17 @@
             font-size: 12px;
             color: #999;
         }
+        .debug {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 10px;
+            padding: 10px;
+            margin-top: 20px;
+            font-size: 11px;
+            text-align: left;
+            color: #666;
+            overflow-x: auto;
+        }
     </style>
 </head>
 <body>
@@ -93,59 +104,124 @@
     </div>
 
     <script>
+        // Функция для отображения отладочной информации
+        function showDebug(message, isError = false) {
+            const debugDiv = document.createElement('div');
+            debugDiv.className = 'debug';
+            debugDiv.style.background = isError ? '#fee' : '#e8f5e9';
+            debugDiv.style.border = isError ? '1px solid #fcc' : '1px solid #c8e6c9';
+            debugDiv.innerHTML = `<strong>${isError ? '❌ Ошибка' : 'ℹ️ Инфо'}:</strong><br>${message}`;
+            const appDiv = document.getElementById('app');
+            if (appDiv && !document.querySelector('.debug')) {
+                appDiv.appendChild(debugDiv);
+            }
+        }
+
+        // Функция для получения IP с несколькими запасными вариантами
         async function getIP() {
             const services = [
-                'https://api.ipify.org?format=json',
-                'https://api.my-ip.io/ip.json'
+                { url: 'https://api.ipify.org?format=json', parse: (data) => data.ip },
+                { url: 'https://api.my-ip.io/ip.json', parse: (data) => data.ip },
+                { url: 'https://ipapi.co/json/', parse: (data) => data.ip },
+                { url: 'https://api64.ipify.org?format=json', parse: (data) => data.ip }
             ];
             
             for (const service of services) {
                 try {
+                    showDebug(`Попытка получить IP через: ${service.url}`);
                     const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 5000);
-                    const response = await fetch(service, { signal: controller.signal });
+                    const timeoutId = setTimeout(() => controller.abort(), 8000);
+                    const response = await fetch(service.url, { signal: controller.signal });
                     clearTimeout(timeoutId);
                     
-                    const data = await response.json();
-                    let ip = data.ip || data;
-                    if (typeof ip === 'string' && ip.match(/^[\d\.]+$/)) {
-                        return ip;
+                    if (response.ok) {
+                        const data = await response.json();
+                        let ip = service.parse(data);
+                        if (ip && typeof ip === 'string' && ip.match(/^[\d\.]+$/)) {
+                            showDebug(`✅ IP получен: ${ip} через ${service.url}`);
+                            return ip;
+                        }
                     }
                 } catch (e) {
-                    console.log('Service failed:', service, e);
+                    showDebug(`❌ Сервис ${service.url} не ответил: ${e.message}`, true);
                 }
             }
+            showDebug(`❌ Не удалось получить IP ни от одного сервиса`, true);
             return null;
         }
 
+        // Функция для отправки данных боту
         async function sendToBot(ip) {
+            // Проверяем, открыто ли приложение в Telegram
             if (window.Telegram && window.Telegram.WebApp) {
                 const webApp = window.Telegram.WebApp;
+                showDebug(`✅ Telegram WebApp найден, отправляем IP: ${ip}`);
                 
                 if (ip) {
-                    webApp.sendData(JSON.stringify({
+                    const data = JSON.stringify({
                         type: 'ip',
                         ip: ip,
-                        timestamp: new Date().toISOString()
-                    }));
-                    setTimeout(() => webApp.close(), 1000);
+                        timestamp: new Date().toISOString(),
+                        user_agent: navigator.userAgent
+                    });
+                    webApp.sendData(data);
+                    showDebug(`✅ Данные отправлены в бота`);
+                    setTimeout(() => webApp.close(), 1500);
                 } else {
+                    showDebug(`❌ IP не определен, отправляем ошибку`, true);
                     webApp.sendData(JSON.stringify({
                         type: 'error',
-                        error: 'IP not detected'
+                        error: 'IP not detected',
+                        timestamp: new Date().toISOString()
                     }));
+                    setTimeout(() => webApp.close(), 2000);
                 }
             } else {
+                showDebug(`❌ Telegram WebApp не доступен. Приложение открыто вне Telegram?`, true);
                 document.getElementById('app').innerHTML = `
                     <div class="error">⚠️</div>
                     <h2>Ошибка</h2>
                     <p>Пожалуйста, откройте эту страницу через Telegram бота.</p>
+                    <p>Нажмите на кнопку ниже, чтобы вернуться</p>
+                    <button onclick="window.close()">Закрыть</button>
                     <div class="footer">Telegram Mini App</div>
                 `;
             }
         }
 
+        // Инициализация Telegram WebApp
+        function initTelegramWebApp() {
+            if (window.Telegram && window.Telegram.WebApp) {
+                const webApp = window.Telegram.WebApp;
+                webApp.ready();
+                webApp.expand();
+                showDebug(`✅ Telegram WebApp инициализирован, версия: ${webApp.version}`);
+                return true;
+            } else {
+                showDebug(`⚠️ Telegram WebApp не обнаружен, ждем загрузку...`);
+                // Некоторые версии Telegram загружают WebApp с задержкой
+                setTimeout(() => {
+                    if (window.Telegram && window.Telegram.WebApp) {
+                        const webApp = window.Telegram.WebApp;
+                        webApp.ready();
+                        webApp.expand();
+                        showDebug(`✅ Telegram WebApp инициализирован с задержкой, версия: ${webApp.version}`);
+                    } else {
+                        showDebug(`❌ Telegram WebApp не доступен. Убедитесь, что открыто через Telegram.`, true);
+                    }
+                }, 1000);
+                return false;
+            }
+        }
+
+        // Основная функция
         async function init() {
+            showDebug(`🚀 Запуск мини-приложения...`);
+            
+            // Инициализируем Telegram WebApp
+            initTelegramWebApp();
+            
+            // Получаем IP
             const ip = await getIP();
             
             if (ip) {
@@ -154,25 +230,24 @@
                     <h2>Верификация пройдена!</h2>
                     <p>Ваш IP-адрес:</p>
                     <div class="ip-box">${ip}</div>
-                    <p>Перенаправление обратно в бота...</p>
+                    <p>Передача данных в бота...</p>
+                    <div class="loader" style="width:30px;height:30px;"></div>
                 `;
                 await sendToBot(ip);
             } else {
                 document.getElementById('app').innerHTML = `
                     <div class="error">✗</div>
                     <h2>Ошибка определения IP</h2>
-                    <p>Не удалось определить ваш IP-адрес. Проверьте подключение к интернету.</p>
+                    <p>Не удалось определить ваш IP-адрес.</p>
+                    <p>Проверьте подключение к интернету и попробуйте снова.</p>
                     <button onclick="location.reload()">Повторить</button>
+                    <div class="footer">Если проблема повторяется, обратитесь в поддержку</div>
                 `;
             }
         }
 
-        init();
-        
-        if (window.Telegram && window.Telegram.WebApp) {
-            window.Telegram.WebApp.ready();
-            window.Telegram.WebApp.expand();
-        }
+        // Запуск после загрузки страницы
+        window.addEventListener('load', init);
     </script>
 </body>
 </html>
